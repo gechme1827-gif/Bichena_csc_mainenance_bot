@@ -1,9 +1,12 @@
 import os
 import json
-import logging
 from datetime import datetime
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -13,60 +16,62 @@ from telegram.ext import (
     filters,
 )
 
-# ============================================================
+# =========================================================
 # CONFIGURATION
-# ============================================================
+# =========================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# SAME TELEGRAM ACCOUNT IS BOTH ADMIN AND TECHNICIAN
+# Your Telegram ID
 ADMIN_ID = 405014345
+
+# The same person is both Admin and Technician
 TECHNICIAN_IDS = [405014345]
 
-DATA_FILE = "requests.json"
-
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
-
-logger = logging.getLogger(__name__)
+CUSTOMERS_FILE = "customers.json"
+REQUESTS_FILE = "requests.json"
 
 
-# ============================================================
-# DATABASE
-# ============================================================
+# =========================================================
+# DATABASE FUNCTIONS
+# =========================================================
 
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        return {
-            "requests": [],
-            "users": {}
-        }
-
+def load_json(filename, default):
     try:
-        with open(DATA_FILE, "r", encoding="utf-8") as file:
+        if not os.path.exists(filename):
+            return default
+
+        with open(filename, "r", encoding="utf-8") as file:
             return json.load(file)
+
     except Exception:
-        return {
-            "requests": [],
-            "users": {}
-        }
+        return default
 
 
-def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as file:
-        json.dump(
-            data,
-            file,
-            indent=2,
-            ensure_ascii=False
-        )
+def save_json(filename, data):
+    with open(filename, "w", encoding="utf-8") as file:
+        json.dump(data, file, indent=4, ensure_ascii=False)
 
 
-# ============================================================
+def load_customers():
+    return load_json(CUSTOMERS_FILE, {})
+
+
+def save_customers(data):
+    save_json(CUSTOMERS_FILE, data)
+
+
+def load_requests():
+    return load_json(REQUESTS_FILE, [])
+
+
+def save_requests(data):
+    save_json(REQUESTS_FILE, data)
+
+
+# =========================================================
 # ROLE CHECKS
-# ============================================================
+# =========================================================
 
 def is_admin(user_id):
     return user_id == ADMIN_ID
@@ -76,53 +81,167 @@ def is_technician(user_id):
     return user_id in TECHNICIAN_IDS
 
 
-# ============================================================
-# USER MENU
-# ============================================================
+# =========================================================
+# CUSTOMER REGISTRATION
+# =========================================================
 
-def user_menu():
-    keyboard = [
+def customer_registered(user_id):
+    customers = load_customers()
+    return str(user_id) in customers
+
+
+async def start_registration(update, context):
+    context.user_data.clear()
+
+    context.user_data["registering"] = True
+    context.user_data["registration_step"] = "full_name"
+
+    await update.message.reply_text(
+        "📝 Customer Registration\n\n"
+        "Please enter your **full name**:",
+        parse_mode="Markdown"
+    )
+
+
+async def process_registration(update, context):
+
+    text = update.message.text.strip()
+    step = context.user_data.get("registration_step")
+
+    if step == "full_name":
+
+        context.user_data["reg_full_name"] = text
+        context.user_data["registration_step"] = "phone"
+
+        await update.message.reply_text(
+            "📱 Please enter your **phone number**:"
+        )
+        return
+
+    if step == "phone":
+
+        context.user_data["reg_phone"] = text
+        context.user_data["registration_step"] = "customer_number"
+
+        await update.message.reply_text(
+            "🆔 Please enter your **Customer / Account Number**:"
+        )
+        return
+
+    if step == "customer_number":
+
+        context.user_data["reg_customer_number"] = text
+        context.user_data["registration_step"] = "address"
+
+        await update.message.reply_text(
+            "📍 Please enter your **full address/location**:"
+        )
+        return
+
+    if step == "address":
+
+        context.user_data["reg_address"] = text
+        context.user_data["registration_step"] = "organization"
+
+        await update.message.reply_text(
+            "🏢 Please enter your **company/organization name**.\n\n"
+            "If you are an individual customer, type: Individual"
+        )
+        return
+
+    if step == "organization":
+
+        context.user_data["reg_organization"] = text
+        context.user_data["registration_step"] = "email"
+
+        await update.message.reply_text(
+            "📧 Please enter your **email address**:"
+        )
+        return
+
+    if step == "email":
+
+        context.user_data["reg_email"] = text
+
+        user = update.effective_user
+
+        customers = load_customers()
+
+        customers[str(user.id)] = {
+            "telegram_id": user.id,
+            "telegram_username": user.username or "",
+            "full_name": context.user_data["reg_full_name"],
+            "phone": context.user_data["reg_phone"],
+            "customer_number": context.user_data["reg_customer_number"],
+            "address": context.user_data["reg_address"],
+            "organization": context.user_data["reg_organization"],
+            "email": context.user_data["reg_email"],
+            "registered_at": datetime.now().strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
+        }
+
+        save_customers(customers)
+
+        context.user_data.pop("registering", None)
+        context.user_data.pop("registration_step", None)
+
+        await update.message.reply_text(
+            "✅ **Registration completed successfully!**\n\n"
+            "You can now submit a request.",
+            parse_mode="Markdown"
+        )
+
+        await show_main_menu(update, context)
+
+
+# =========================================================
+# MENUS
+# =========================================================
+
+def customer_menu():
+
+    return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
-                "📧 Generate Email",
-                callback_data="generate"
-            ),
-            InlineKeyboardButton(
-                "📋 My Emails",
-                callback_data="my_emails"
-            ),
+                "📨 Request",
+                callback_data="request"
+            )
         ],
         [
             InlineKeyboardButton(
-                "🔍 Check Email",
-                callback_data="check"
-            ),
+                "📋 My Requests",
+                callback_data="my_requests"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🔍 Check Request",
+                callback_data="check_request"
+            )
+        ],
+        [
             InlineKeyboardButton(
                 "💰 My Credits",
                 callback_data="credits"
-            ),
+            )
         ],
         [
             InlineKeyboardButton(
                 "👤 My Account",
                 callback_data="account"
-            ),
-        ],
-    ]
+            )
+        ]
+    ])
 
-    return InlineKeyboardMarkup(keyboard)
-
-
-# ============================================================
-# ADMIN + TECHNICIAN MENU
-# ============================================================
 
 def admin_menu():
-    keyboard = [
+
+    return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
                 "📋 All Requests",
-                callback_data="admin_requests"
+                callback_data="all_requests"
             )
         ],
         [
@@ -134,301 +253,314 @@ def admin_menu():
         [
             InlineKeyboardButton(
                 "📋 My Assigned Requests",
-                callback_data="tech_requests"
+                callback_data="technician_requests"
             )
         ],
         [
             InlineKeyboardButton(
-                "📧 Generate Email",
-                callback_data="generate"
+                "📨 Request",
+                callback_data="request"
             )
         ],
         [
             InlineKeyboardButton(
-                "📋 My Emails",
-                callback_data="my_emails"
-            ),
+                "📋 My Requests",
+                callback_data="my_requests"
+            )
+        ],
+        [
             InlineKeyboardButton(
-                "🔍 Check Email",
-                callback_data="check"
-            ),
+                "🔍 Check Request",
+                callback_data="check_request"
+            )
         ],
         [
             InlineKeyboardButton(
                 "👤 My Account",
                 callback_data="account"
-            ),
-        ],
-    ]
-
-    return InlineKeyboardMarkup(keyboard)
+            )
+        ]
+    ])
 
 
-# ============================================================
-# FIND REQUEST
-# ============================================================
+async def show_main_menu(update, context):
 
-def get_request(request_id):
-    data = load_data()
+    user = update.effective_user
 
-    for request in data["requests"]:
-        if request["id"] == request_id:
-            return request
+    if is_admin(user.id) or is_technician(user.id):
 
-    return None
+        await update.message.reply_text(
+            "🏠 **Main Menu**\n\n"
+            "Role: 👑 Admin + 👨‍🔧 Technician",
+            reply_markup=admin_menu(),
+            parse_mode="Markdown"
+        )
+
+    else:
+
+        await update.message.reply_text(
+            "🏠 **Customer Menu**\n\n"
+            "Select an option:",
+            reply_markup=customer_menu(),
+            parse_mode="Markdown"
+        )
 
 
-# ============================================================
-# START
-# ============================================================
+# =========================================================
+# START COMMAND
+# =========================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.effective_user
-    user_id = user.id
 
-    data = load_data()
+    customers = load_customers()
 
-    data["users"][str(user_id)] = {
-        "id": user_id,
-        "name": user.full_name,
-        "username": user.username,
-    }
+    # Automatically store basic Telegram information
+    if str(user.id) not in customers:
 
-    save_data(data)
+        customers[str(user.id)] = {
+            "telegram_id": user.id,
+            "telegram_username": user.username or "",
+            "full_name": "",
+            "phone": "",
+            "customer_number": "",
+            "address": "",
+            "organization": "",
+            "email": "",
+            "registered_at": ""
+        }
 
-    # ADMIN + TECHNICIAN
-    if is_admin(user_id) and is_technician(user_id):
+        save_customers(customers)
+
+    if not customer_registered(user.id):
 
         await update.message.reply_text(
-            f"👋 Welcome {user.first_name}!\n\n"
-            "👑 Role: ADMIN\n"
-            "👨‍🔧 Role: TECHNICIAN\n\n"
-            "You have both administrator and technician access.",
-            reply_markup=admin_menu(),
+            "👋 Welcome!\n\n"
+            "You must complete your customer registration "
+            "before submitting a request."
+        )
+
+        await start_registration(update, context)
+        return
+
+    await show_main_menu(update, context)
+
+
+# =========================================================
+# REQUEST CREATION
+# =========================================================
+
+async def start_request(update, context):
+
+    user = update.effective_user
+
+    if not customer_registered(user.id):
+
+        await update.callback_query.answer()
+
+        await update.callback_query.message.reply_text(
+            "⚠️ You must register first."
+        )
+
+        context.user_data.clear()
+        context.user_data["registering"] = True
+        context.user_data["registration_step"] = "full_name"
+
+        await update.callback_query.message.reply_text(
+            "📝 Please enter your **full name**:",
+            parse_mode="Markdown"
         )
 
         return
-
-    # ADMIN ONLY
-    if is_admin(user_id):
-
-        await update.message.reply_text(
-            f"👑 Welcome Admin, {user.first_name}!\n\n"
-            "You can manage requests and assign technicians.",
-            reply_markup=admin_menu(),
-        )
-
-        return
-
-    # TECHNICIAN ONLY
-    if is_technician(user_id):
-
-        await update.message.reply_text(
-            f"👨‍🔧 Welcome Technician {user.first_name}!\n\n"
-            "You can view requests assigned to you.",
-            reply_markup=admin_menu(),
-        )
-
-        return
-
-    # NORMAL USER
-    await update.message.reply_text(
-        f"👋 Welcome {user.first_name}!\n\n"
-        "Select an option:",
-        reply_markup=user_menu(),
-    )
-
-
-# ============================================================
-# GENERATE EMAIL / REQUEST
-# ============================================================
-
-async def generate_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    query = update.callback_query
-    await query.answer()
 
     context.user_data["creating_request"] = True
 
-    await query.message.reply_text(
-        "📧 Generate Email Request\n\n"
-        "Please send the request details.\n\n"
-        "Example:\n\n"
-        "Customer: ABC Company\n"
-        "Service: New connection\n"
-        "Power: 50 kW\n"
-        "Location: Addis Ababa"
+    await update.callback_query.answer()
+
+    await update.callback_query.message.reply_text(
+        "📨 **New Request**\n\n"
+        "Please describe your request in detail.\n\n"
+        "Include important information such as:\n"
+        "• Service required\n"
+        "• Problem description\n"
+        "• Location\n"
+        "• Any other useful information",
+        parse_mode="Markdown"
     )
 
 
-# ============================================================
-# RECEIVE NEW REQUEST
-# ============================================================
-
-async def receive_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if not context.user_data.get("creating_request"):
-        return
+async def receive_request(update, context):
 
     user = update.effective_user
-    message_text = update.message.text
 
-    data = load_data()
+    details = update.message.text.strip()
 
-    if data["requests"]:
-        next_id = max(
-            request["id"]
-            for request in data["requests"]
-        ) + 1
-    else:
-        next_id = 1
+    customers = load_customers()
 
-    request = {
-        "id": next_id,
-        "user_id": user.id,
-        "user_name": user.full_name,
-        "username": user.username,
-        "details": message_text,
-        "status": "Pending",
-        "technician_id": None,
-        "technician_name": None,
-        "created_at": datetime.now().strftime(
-            "%Y-%m-%d %H:%M:%S"
-        ),
-    }
+    customer = customers.get(str(user.id))
 
-    data["requests"].append(request)
-    save_data(data)
-
-    context.user_data["creating_request"] = False
-
-    await update.message.reply_text(
-        f"✅ Request submitted successfully!\n\n"
-        f"🆔 Request ID: #{next_id}\n"
-        f"📌 Status: Pending\n\n"
-        "An administrator will review your request."
-    )
-
-    # SEND REQUEST TO ADMIN
-    try:
-
-        await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=(
-                "📥 NEW REQUEST\n\n"
-                f"🆔 Request ID: #{next_id}\n"
-                f"👤 Customer: {user.full_name}\n"
-                f"🆔 User ID: {user.id}\n\n"
-                f"📝 Details:\n{message_text}"
-            ),
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "👨‍🔧 Assign Technician",
-                            callback_data=f"assign_{next_id}"
-                        )
-                    ]
-                ]
-            ),
+    if not customer:
+        await update.message.reply_text(
+            "⚠️ Customer registration not found.\n"
+            "Please use /start."
         )
-
-    except Exception as error:
-        logger.error(
-            f"Could not notify admin: {error}"
-        )
-
-
-# ============================================================
-# MY EMAILS
-# ============================================================
-
-async def my_emails(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    query = update.callback_query
-    await query.answer()
-
-    user_id = query.from_user.id
-
-    data = load_data()
-
-    requests = [
-        request
-        for request in data["requests"]
-        if request["user_id"] == user_id
-    ]
-
-    if not requests:
-
-        await query.message.reply_text(
-            "📋 You don't have any requests yet."
-        )
-
         return
 
-    text = "📋 YOUR REQUESTS\n\n"
+    requests = load_requests()
 
-    for request in requests:
+    if requests:
+        request_id = max(
+            int(r["id"]) for r in requests
+        ) + 1
+    else:
+        request_id = 1
 
-        technician = (
-            request["technician_name"]
-            or "Not assigned"
+    request = {
+        "id": request_id,
+        "user_id": user.id,
+        "user_name": customer["full_name"],
+        "username": customer["telegram_username"],
+        "phone": customer["phone"],
+        "customer_number": customer["customer_number"],
+        "address": customer["address"],
+        "organization": customer["organization"],
+        "email": customer["email"],
+        "details": details,
+        "status": "Pending",
+        "technician_id": None,
+        "technician_name": "",
+        "created_at": datetime.now().strftime(
+            "%Y-%m-%d %H:%M:%S"
         )
+    }
 
-        text += (
-            f"🆔 #{request['id']}\n"
-            f"📌 Status: {request['status']}\n"
-            f"👨‍🔧 Technician: {technician}\n"
-            f"📅 {request['created_at']}\n\n"
-        )
+    requests.append(request)
 
-    await query.message.reply_text(text)
+    save_requests(requests)
+
+    context.user_data.pop("creating_request", None)
+
+    await update.message.reply_text(
+        f"✅ **Request submitted successfully!**\n\n"
+        f"📋 Request ID: **#{request_id}**\n"
+        f"📌 Status: **Pending**\n\n"
+        f"An administrator will assign a technician.",
+        parse_mode="Markdown"
+    )
+
+    # Notify admin
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "👨‍🔧 Assign Technician",
+                callback_data=f"assign_{request_id}"
+            )
+        ]
+    ])
+
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=(
+            f"📨 **New Customer Request**\n\n"
+            f"📋 Request ID: #{request_id}\n\n"
+            f"👤 Customer: {customer['full_name']}\n"
+            f"📱 Phone: {customer['phone']}\n"
+            f"🆔 Account: {customer['customer_number']}\n"
+            f"🏢 Organization: {customer['organization']}\n"
+            f"📍 Address: {customer['address']}\n"
+            f"📧 Email: {customer['email']}\n\n"
+            f"📝 Request:\n{details}\n\n"
+            f"📌 Status: Pending"
+        ),
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
 
 
-# ============================================================
-# CHECK REQUEST
-# ============================================================
+# =========================================================
+# MY REQUESTS
+# =========================================================
 
-async def check_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def my_requests(update, context):
 
     query = update.callback_query
+    user = update.effective_user
+
+    await query.answer()
+
+    requests = load_requests()
+
+    my_requests_list = [
+        r for r in requests
+        if r["user_id"] == user.id
+    ]
+
+    if not my_requests_list:
+
+        await query.message.reply_text(
+            "📋 You have no requests yet."
+        )
+        return
+
+    text = "📋 **My Requests**\n\n"
+
+    for r in my_requests_list:
+
+        text += (
+            f"📋 **#{r['id']}**\n"
+            f"📌 Status: {r['status']}\n"
+            f"👨‍🔧 Technician: "
+            f"{r['technician_name'] or 'Not assigned'}\n"
+            f"📅 {r['created_at']}\n\n"
+        )
+
+    await query.message.reply_text(
+        text,
+        parse_mode="Markdown"
+    )
+
+
+# =========================================================
+# CHECK REQUEST
+# =========================================================
+
+async def start_check_request(update, context):
+
+    query = update.callback_query
+
     await query.answer()
 
     context.user_data["checking_request"] = True
 
     await query.message.reply_text(
-        "🔍 Enter your Request ID.\n\n"
-        "Example:\n"
-        "15"
+        "🔍 Enter the **Request ID** you want to check:",
+        parse_mode="Markdown"
     )
 
 
-# ============================================================
-# RECEIVE CHECK REQUEST ID
-# ============================================================
+async def receive_check(update, context):
 
-async def receive_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if not context.user_data.get("checking_request"):
-        return
+    user = update.effective_user
 
     try:
-        request_id = int(
-            update.message.text.strip()
-        )
-
+        request_id = int(update.message.text.strip())
     except ValueError:
 
         await update.message.reply_text(
-            "❌ Please enter a valid Request ID."
+            "⚠️ Please enter a valid Request ID."
         )
-
         return
 
-    request = get_request(request_id)
+    requests = load_requests()
 
-    context.user_data["checking_request"] = False
+    request = next(
+        (
+            r for r in requests
+            if int(r["id"]) == request_id
+        ),
+        None
+    )
 
     if not request:
 
@@ -436,200 +568,157 @@ async def receive_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "❌ Request not found."
         )
 
+        context.user_data.pop("checking_request", None)
         return
 
-    user_id = update.effective_user.id
-
+    # Customer can only see own request
+    # Admin/technician can see all requests
     if (
-        request["user_id"] != user_id
-        and not is_admin(user_id)
-        and not is_technician(user_id)
+        request["user_id"] != user.id
+        and not is_admin(user.id)
+        and not is_technician(user.id)
     ):
 
         await update.message.reply_text(
-            "❌ You are not authorized to view this request."
+            "⛔ You are not authorized to view this request."
         )
 
+        context.user_data.pop("checking_request", None)
         return
 
-    await update.message.reply_text(
-        f"🔍 REQUEST #{request['id']}\n\n"
+    text = (
+        f"📋 **Request #{request['id']}**\n\n"
         f"👤 Customer: {request['user_name']}\n"
+        f"📱 Phone: {request['phone']}\n"
+        f"🆔 Account: {request['customer_number']}\n"
+        f"🏢 Organization: {request['organization']}\n"
+        f"📍 Address: {request['address']}\n"
+        f"📧 Email: {request['email']}\n\n"
+        f"📝 Request:\n{request['details']}\n\n"
         f"📌 Status: {request['status']}\n"
         f"👨‍🔧 Technician: "
         f"{request['technician_name'] or 'Not assigned'}\n"
-        f"📅 Created: {request['created_at']}\n\n"
-        f"📝 Details:\n{request['details']}"
+        f"📅 Created: {request['created_at']}"
     )
 
-
-# ============================================================
-# CREDITS
-# ============================================================
-
-async def credits(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    query = update.callback_query
-    await query.answer()
-
-    await query.message.reply_text(
-        "💰 MY CREDITS\n\n"
-        "Credits: 0\n\n"
-        "Credit management can be added later."
+    await update.message.reply_text(
+        text,
+        parse_mode="Markdown"
     )
 
-
-# ============================================================
-# ACCOUNT
-# ============================================================
-
-async def account(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    query = update.callback_query
-    await query.answer()
-
-    user = query.from_user
-
-    roles = []
-
-    if is_admin(user.id):
-        roles.append("👑 Administrator")
-
-    if is_technician(user.id):
-        roles.append("👨‍🔧 Technician")
-
-    if not roles:
-        roles.append("👤 User")
-
-    await query.message.reply_text(
-        f"👤 MY ACCOUNT\n\n"
-        f"Name: {user.full_name}\n"
-        f"Username: "
-        f"@{user.username if user.username else 'None'}\n"
-        f"Telegram ID: {user.id}\n\n"
-        "Roles:\n"
-        + "\n".join(roles)
-    )
+    context.user_data.pop("checking_request", None)
 
 
-# ============================================================
+# =========================================================
 # ADMIN - ALL REQUESTS
-# ============================================================
+# =========================================================
 
-async def admin_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def all_requests(update, context):
 
     query = update.callback_query
+    user = update.effective_user
+
     await query.answer()
 
-    if not is_admin(query.from_user.id):
-        return
-
-    data = load_data()
-
-    if not data["requests"]:
+    if not is_admin(user.id):
 
         await query.message.reply_text(
-            "📋 No requests available."
+            "⛔ Admin access required."
         )
-
         return
 
-    for request in data["requests"]:
+    requests = load_requests()
 
-        technician = (
-            request["technician_name"]
-            or "Not assigned"
+    if not requests:
+
+        await query.message.reply_text(
+            "📋 No requests found."
+        )
+        return
+
+    for r in requests:
+
+        text = (
+            f"📋 **Request #{r['id']}**\n\n"
+            f"👤 Customer: {r['user_name']}\n"
+            f"📱 Phone: {r['phone']}\n"
+            f"🆔 Account: {r['customer_number']}\n"
+            f"🏢 Organization: {r['organization']}\n"
+            f"📍 Address: {r['address']}\n\n"
+            f"📝 {r['details']}\n\n"
+            f"📌 Status: {r['status']}\n"
+            f"👨‍🔧 Technician: "
+            f"{r['technician_name'] or 'Not assigned'}"
         )
 
         keyboard = []
 
-        if not request["technician_id"]:
+        if not r["technician_id"]:
 
-            keyboard.append(
-                [
-                    InlineKeyboardButton(
-                        "👨‍🔧 Assign Technician",
-                        callback_data=f"assign_{request['id']}"
-                    )
-                ]
-            )
+            keyboard.append([
+                InlineKeyboardButton(
+                    "👨‍🔧 Assign Technician",
+                    callback_data=f"assign_{r['id']}"
+                )
+            ])
 
         await query.message.reply_text(
-            f"🆔 REQUEST #{request['id']}\n\n"
-            f"👤 Customer: {request['user_name']}\n"
-            f"📌 Status: {request['status']}\n"
-            f"👨‍🔧 Technician: {technician}\n"
-            f"📅 Created: {request['created_at']}\n\n"
-            f"📝 Details:\n{request['details']}",
-            reply_markup=(
-                InlineKeyboardMarkup(keyboard)
-                if keyboard
-                else None
-            )
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+            if keyboard else None,
+            parse_mode="Markdown"
         )
 
 
-# ============================================================
+# =========================================================
 # ASSIGN TECHNICIAN
-# ============================================================
+# =========================================================
 
-async def assign_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def assign_technician(update, context):
 
     query = update.callback_query
+    user = update.effective_user
+
     await query.answer()
 
-    if not is_admin(query.from_user.id):
+    if not is_admin(user.id):
+
+        await query.message.reply_text(
+            "⛔ Admin access required."
+        )
         return
 
     request_id = int(
         query.data.split("_")[1]
     )
 
-    keyboard = [
+    keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
-                "👨‍🔧 Assign to Me",
+                "👨‍🔧 Admin / Technician",
                 callback_data=f"tech_{request_id}_{ADMIN_ID}"
             )
         ]
-    ]
+    ])
 
     await query.message.reply_text(
         f"👨‍🔧 Select technician for Request #{request_id}:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        reply_markup=keyboard
     )
 
 
-# ============================================================
-# TECHNICIANS
-# ============================================================
-
-async def technicians(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def select_technician(update, context):
 
     query = update.callback_query
+    user = update.effective_user
+
     await query.answer()
 
-    if not is_admin(query.from_user.id):
-        return
+    if not is_admin(user.id):
 
-    await query.message.reply_text(
-        "👨‍🔧 TECHNICIANS\n\n"
-        "1. Admin / Technician\n"
-        "Telegram ID: 405014345\n"
-        "Status: Active"
-    )
-
-
-# ============================================================
-# ASSIGN TECHNICIAN
-# ============================================================
-
-async def technician_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    query = update.callback_query
-    await query.answer()
-
-    if not is_admin(query.from_user.id):
+        await query.message.reply_text(
+            "⛔ Admin access required."
+        )
         return
 
     parts = query.data.split("_")
@@ -637,22 +726,21 @@ async def technician_selected(update: Update, context: ContextTypes.DEFAULT_TYPE
     request_id = int(parts[1])
     technician_id = int(parts[2])
 
-    data = load_data()
+    requests = load_requests()
 
-    request = None
-
-    for item in data["requests"]:
-
-        if item["id"] == request_id:
-            request = item
-            break
+    request = next(
+        (
+            r for r in requests
+            if int(r["id"]) == request_id
+        ),
+        None
+    )
 
     if not request:
 
         await query.message.reply_text(
             "❌ Request not found."
         )
-
         return
 
     technician_name = "Admin / Technician"
@@ -661,372 +749,512 @@ async def technician_selected(update: Update, context: ContextTypes.DEFAULT_TYPE
     request["technician_name"] = technician_name
     request["status"] = "Assigned"
 
-    save_data(data)
+    save_requests(requests)
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "▶️ Start",
+                callback_data=f"start_{request_id}"
+            ),
+            InlineKeyboardButton(
+                "❌ Reject",
+                callback_data=f"reject_{request_id}"
+            )
+        ]
+    ])
 
     await query.message.reply_text(
-        f"✅ Request #{request_id} assigned successfully.\n\n"
-        f"👨‍🔧 Technician: {technician_name}\n"
-        f"🆔 Technician ID: {technician_id}\n"
-        f"📌 Status: Assigned"
+        f"✅ Request #{request_id} assigned to "
+        f"**{technician_name}**.",
+        parse_mode="Markdown"
     )
 
-    # NOTIFY TECHNICIAN
-    try:
+    # Notify technician
+    await context.bot.send_message(
+        chat_id=technician_id,
+        text=(
+            f"👨‍🔧 **New Assigned Request**\n\n"
+            f"📋 Request: #{request_id}\n"
+            f"👤 Customer: {request['user_name']}\n"
+            f"📱 Phone: {request['phone']}\n"
+            f"📍 Address: {request['address']}\n"
+            f"📝 Request:\n{request['details']}\n\n"
+            f"📌 Status: Assigned"
+        ),
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
 
-        await context.bot.send_message(
-            chat_id=technician_id,
-            text=(
-                "📥 NEW ASSIGNED REQUEST\n\n"
-                f"🆔 Request #{request_id}\n"
-                f"👤 Customer: {request['user_name']}\n\n"
-                f"📝 Details:\n{request['details']}\n\n"
-                "📌 Status: Assigned"
-            ),
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "▶️ Start",
-                            callback_data=f"startwork_{request_id}"
-                        )
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            "❌ Reject",
-                            callback_data=f"reject_{request_id}"
-                        )
-                    ],
-                ]
-            )
-        )
-
-    except Exception as error:
-
-        logger.error(
-            f"Could not notify technician: {error}"
-        )
+    # Notify customer
+    await context.bot.send_message(
+        chat_id=request["user_id"],
+        text=(
+            f"👨‍🔧 **Technician Assigned**\n\n"
+            f"📋 Request: #{request_id}\n"
+            f"👨‍🔧 Technician: {technician_name}\n"
+            f"📌 Status: Assigned"
+        ),
+        parse_mode="Markdown"
+    )
 
 
-# ============================================================
+# =========================================================
 # TECHNICIAN REQUESTS
-# ============================================================
+# =========================================================
 
-async def tech_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def technician_requests(update, context):
 
     query = update.callback_query
+    user = update.effective_user
+
     await query.answer()
 
-    technician_id = query.from_user.id
-
-    if not is_technician(technician_id):
-        return
-
-    data = load_data()
-
-    requests = [
-        request
-        for request in data["requests"]
-        if request["technician_id"] == technician_id
-    ]
-
-    if not requests:
+    if not is_technician(user.id):
 
         await query.message.reply_text(
-            "📋 You don't have any assigned requests."
+            "⛔ Technician access required."
         )
-
         return
 
-    for request in requests:
+    requests = load_requests()
+
+    assigned = [
+        r for r in requests
+        if r["technician_id"] == user.id
+        and r["status"] not in ["Completed", "Rejected"]
+    ]
+
+    if not assigned:
+
+        await query.message.reply_text(
+            "👨‍🔧 You have no active assigned requests."
+        )
+        return
+
+    for r in assigned:
 
         keyboard = []
 
-        if request["status"] == "Assigned":
+        if r["status"] == "Assigned":
 
-            keyboard.append(
-                [
-                    InlineKeyboardButton(
-                        "▶️ Start",
-                        callback_data=f"startwork_{request['id']}"
-                    )
-                ]
-            )
+            keyboard.append([
+                InlineKeyboardButton(
+                    "▶️ Start",
+                    callback_data=f"start_{r['id']}"
+                ),
+                InlineKeyboardButton(
+                    "❌ Reject",
+                    callback_data=f"reject_{r['id']}"
+                )
+            ])
 
-        elif request["status"] == "In Progress":
+        elif r["status"] == "In Progress":
 
-            keyboard.append(
-                [
-                    InlineKeyboardButton(
-                        "✅ Complete",
-                        callback_data=f"complete_{request['id']}"
-                    )
-                ]
-            )
+            keyboard.append([
+                InlineKeyboardButton(
+                    "✅ Complete",
+                    callback_data=f"complete_{r['id']}"
+                )
+            ])
 
         await query.message.reply_text(
-            f"🆔 REQUEST #{request['id']}\n\n"
-            f"👤 Customer: {request['user_name']}\n"
-            f"📌 Status: {request['status']}\n\n"
-            f"📝 Details:\n{request['details']}",
-            reply_markup=(
-                InlineKeyboardMarkup(keyboard)
-                if keyboard
-                else None
-            )
+            f"📋 **Request #{r['id']}**\n\n"
+            f"👤 Customer: {r['user_name']}\n"
+            f"📱 Phone: {r['phone']}\n"
+            f"📍 Address: {r['address']}\n"
+            f"📝 {r['details']}\n\n"
+            f"📌 Status: {r['status']}",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
         )
 
 
-# ============================================================
-# START WORK
-# ============================================================
+# =========================================================
+# START REQUEST
+# =========================================================
 
-async def start_work(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start_assigned_request(update, context):
 
     query = update.callback_query
-    await query.answer()
+    user = update.effective_user
 
-    technician_id = query.from_user.id
+    await query.answer()
 
     request_id = int(
         query.data.split("_")[1]
     )
 
-    data = load_data()
+    requests = load_requests()
 
-    request = None
-
-    for item in data["requests"]:
-
-        if item["id"] == request_id:
-            request = item
-            break
+    request = next(
+        (
+            r for r in requests
+            if int(r["id"]) == request_id
+        ),
+        None
+    )
 
     if not request:
-        return
-
-    if request["technician_id"] != technician_id:
 
         await query.message.reply_text(
-            "❌ This request is not assigned to you."
+            "❌ Request not found."
         )
+        return
 
+    if request["technician_id"] != user.id:
+
+        await query.message.reply_text(
+            "⛔ This request is not assigned to you."
+        )
         return
 
     request["status"] = "In Progress"
 
-    save_data(data)
+    save_requests(requests)
 
     await query.message.reply_text(
-        f"▶️ Request #{request_id}\n\n"
-        "📌 Status: IN PROGRESS"
+        f"▶️ Request #{request_id} started.\n\n"
+        f"Status: **In Progress**",
+        parse_mode="Markdown"
     )
 
-    # NOTIFY CUSTOMER
-    try:
-
-        await context.bot.send_message(
-            chat_id=request["user_id"],
-            text=(
-                f"🔄 Request #{request_id} Update\n\n"
-                "A technician has started working on your request.\n\n"
-                "📌 Status: In Progress"
-            )
-        )
-
-    except Exception as error:
-
-        logger.error(
-            f"Could not notify customer: {error}"
-        )
+    await context.bot.send_message(
+        chat_id=request["user_id"],
+        text=(
+            f"🔧 **Your request is now being handled.**\n\n"
+            f"📋 Request: #{request_id}\n"
+            f"📌 Status: In Progress"
+        ),
+        parse_mode="Markdown"
+    )
 
 
-# ============================================================
+# =========================================================
 # COMPLETE REQUEST
-# ============================================================
+# =========================================================
 
-async def complete_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def complete_request(update, context):
 
     query = update.callback_query
-    await query.answer()
+    user = update.effective_user
 
-    technician_id = query.from_user.id
+    await query.answer()
 
     request_id = int(
         query.data.split("_")[1]
     )
 
-    data = load_data()
+    requests = load_requests()
 
-    request = None
-
-    for item in data["requests"]:
-
-        if item["id"] == request_id:
-            request = item
-            break
+    request = next(
+        (
+            r for r in requests
+            if int(r["id"]) == request_id
+        ),
+        None
+    )
 
     if not request:
-        return
-
-    if request["technician_id"] != technician_id:
 
         await query.message.reply_text(
-            "❌ This request is not assigned to you."
+            "❌ Request not found."
         )
+        return
 
+    if request["technician_id"] != user.id:
+
+        await query.message.reply_text(
+            "⛔ This request is not assigned to you."
+        )
         return
 
     request["status"] = "Completed"
 
-    save_data(data)
+    save_requests(requests)
 
     await query.message.reply_text(
-        f"✅ Request #{request_id}\n\n"
-        "📌 Status: COMPLETED"
+        f"✅ **Request #{request_id} completed.**",
+        parse_mode="Markdown"
     )
 
-    # NOTIFY CUSTOMER
-    try:
+    await context.bot.send_message(
+        chat_id=request["user_id"],
+        text=(
+            f"✅ **Your request has been completed.**\n\n"
+            f"📋 Request: #{request_id}\n"
+            f"📌 Status: Completed"
+        ),
+        parse_mode="Markdown"
+    )
 
-        await context.bot.send_message(
-            chat_id=request["user_id"],
-            text=(
-                f"✅ Request #{request_id} Completed\n\n"
-                "Your request has been completed by the technician."
-            )
-        )
-
-    except Exception as error:
-
-        logger.error(
-            f"Could not notify customer: {error}"
-        )
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=(
+            f"✅ **Request Completed**\n\n"
+            f"📋 Request: #{request_id}\n"
+            f"👤 Customer: {request['user_name']}\n"
+            f"👨‍🔧 Technician: {request['technician_name']}"
+        ),
+        parse_mode="Markdown"
+    )
 
 
-# ============================================================
+# =========================================================
 # REJECT REQUEST
-# ============================================================
+# =========================================================
 
-async def reject_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def reject_request(update, context):
 
     query = update.callback_query
-    await query.answer()
+    user = update.effective_user
 
-    technician_id = query.from_user.id
+    await query.answer()
 
     request_id = int(
         query.data.split("_")[1]
     )
 
-    data = load_data()
+    requests = load_requests()
 
-    request = None
-
-    for item in data["requests"]:
-
-        if item["id"] == request_id:
-            request = item
-            break
+    request = next(
+        (
+            r for r in requests
+            if int(r["id"]) == request_id
+        ),
+        None
+    )
 
     if not request:
-        return
-
-    if request["technician_id"] != technician_id:
 
         await query.message.reply_text(
-            "❌ This request is not assigned to you."
+            "❌ Request not found."
         )
+        return
 
+    if request["technician_id"] != user.id:
+
+        await query.message.reply_text(
+            "⛔ This request is not assigned to you."
+        )
         return
 
     request["status"] = "Rejected"
 
-    save_data(data)
+    save_requests(requests)
 
     await query.message.reply_text(
         f"❌ Request #{request_id} rejected."
     )
 
-    # NOTIFY ADMIN
-    try:
+    await context.bot.send_message(
+        chat_id=request["user_id"],
+        text=(
+            f"❌ **Your request has been rejected.**\n\n"
+            f"📋 Request: #{request_id}\n"
+            f"📌 Status: Rejected"
+        ),
+        parse_mode="Markdown"
+    )
 
-        await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=(
-                "⚠️ REQUEST REJECTED\n\n"
-                f"Request #{request_id}\n"
-                "Technician: Admin / Technician\n\n"
-                "Please review the request."
-            )
-        )
-
-    except Exception as error:
-
-        logger.error(
-            f"Could not notify admin: {error}"
-        )
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=(
+            f"❌ **Request Rejected**\n\n"
+            f"📋 Request: #{request_id}\n"
+            f"👤 Customer: {request['user_name']}\n"
+            f"👨‍🔧 Technician: {request['technician_name']}"
+        ),
+        parse_mode="Markdown"
+    )
 
 
-# ============================================================
-# BUTTON ROUTER
-# ============================================================
+# =========================================================
+# TECHNICIANS
+# =========================================================
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def technicians(update, context):
 
     query = update.callback_query
 
-    action = query.data
+    await query.answer()
 
-    if action == "generate":
-        await generate_email(update, context)
+    await query.message.reply_text(
+        "👨‍🔧 **Technicians**\n\n"
+        "1. Admin / Technician\n"
+        f"Telegram ID: `{ADMIN_ID}`\n"
+        "Status: Active",
+        parse_mode="Markdown"
+    )
 
-    elif action == "my_emails":
-        await my_emails(update, context)
 
-    elif action == "check":
-        await check_email(update, context)
+# =========================================================
+# ACCOUNT
+# =========================================================
 
-    elif action == "credits":
+async def account(update, context):
+
+    query = update.callback_query
+    user = update.effective_user
+
+    await query.answer()
+
+    customers = load_customers()
+
+    customer = customers.get(str(user.id))
+
+    if not customer:
+
+        await query.message.reply_text(
+            "❌ Account information not found."
+        )
+        return
+
+    roles = []
+
+    if is_admin(user.id):
+        roles.append("👑 Admin")
+
+    if is_technician(user.id):
+        roles.append("👨‍🔧 Technician")
+
+    if not roles:
+        roles.append("👤 Customer")
+
+    await query.message.reply_text(
+        f"👤 **My Account**\n\n"
+        f"Name: {customer['full_name'] or 'Not registered'}\n"
+        f"📱 Phone: {customer['phone'] or 'Not registered'}\n"
+        f"🆔 Customer Number: "
+        f"{customer['customer_number'] or 'Not registered'}\n"
+        f"🏢 Organization: "
+        f"{customer['organization'] or 'Not registered'}\n"
+        f"📍 Address: "
+        f"{customer['address'] or 'Not registered'}\n"
+        f"📧 Email: "
+        f"{customer['email'] or 'Not registered'}\n"
+        f"🆔 Telegram ID: `{user.id}`\n\n"
+        f"Roles: {', '.join(roles)}",
+        parse_mode="Markdown"
+    )
+
+
+# =========================================================
+# CREDITS
+# =========================================================
+
+async def credits(update, context):
+
+    query = update.callback_query
+
+    await query.answer()
+
+    await query.message.reply_text(
+        "💰 **My Credits**\n\n"
+        "Credits: 0",
+        parse_mode="Markdown"
+    )
+
+
+# =========================================================
+# CALLBACK ROUTER
+# =========================================================
+
+async def button_handler(update, context):
+
+    query = update.callback_query
+
+    data = query.data
+
+    if data == "request":
+
+        await start_request(update, context)
+
+    elif data == "my_requests":
+
+        await my_requests(update, context)
+
+    elif data == "check_request":
+
+        await start_check_request(update, context)
+
+    elif data == "credits":
+
         await credits(update, context)
 
-    elif action == "account":
+    elif data == "account":
+
         await account(update, context)
 
-    elif action == "admin_requests":
-        await admin_requests(update, context)
+    elif data == "all_requests":
 
-    elif action == "technicians":
+        await all_requests(update, context)
+
+    elif data == "technicians":
+
         await technicians(update, context)
 
-    elif action == "tech_requests":
-        await tech_requests(update, context)
+    elif data == "technician_requests":
 
-    elif action.startswith("assign_"):
-        await assign_request(update, context)
+        await technician_requests(update, context)
 
-    elif action.startswith("tech_"):
-        await technician_selected(update, context)
+    elif data.startswith("assign_"):
 
-    elif action.startswith("startwork_"):
-        await start_work(update, context)
+        await assign_technician(update, context)
 
-    elif action.startswith("complete_"):
+    elif data.startswith("tech_"):
+
+        await select_technician(update, context)
+
+    elif data.startswith("start_"):
+
+        await start_assigned_request(update, context)
+
+    elif data.startswith("complete_"):
+
         await complete_request(update, context)
 
-    elif action.startswith("reject_"):
+    elif data.startswith("reject_"):
+
         await reject_request(update, context)
 
 
-# ============================================================
+# =========================================================
+# TEXT MESSAGE ROUTER
+# =========================================================
+
+async def handle_text(update, context):
+
+    if context.user_data.get("registering"):
+
+        await process_registration(update, context)
+        return
+
+    if context.user_data.get("creating_request"):
+
+        await receive_request(update, context)
+        return
+
+    if context.user_data.get("checking_request"):
+
+        await receive_check(update, context)
+        return
+
+    await update.message.reply_text(
+        "Please use /start and select an option."
+    )
+
+
+# =========================================================
 # MAIN
-# ============================================================
+# =========================================================
 
 def main():
 
     if not BOT_TOKEN:
 
         raise ValueError(
-            "BOT_TOKEN environment variable is missing."
+            "BOT_TOKEN environment variable is not set."
         )
 
     application = (
@@ -1035,34 +1263,26 @@ def main():
         .build()
     )
 
+    # Commands
     application.add_handler(
-        CommandHandler(
-            "start",
-            start
-        )
+        CommandHandler("start", start)
     )
 
+    # Inline buttons
     application.add_handler(
-        CallbackQueryHandler(
-            button_handler
-        )
+        CallbackQueryHandler(button_handler)
     )
 
-    application.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            receive_request
-        )
-    )
-
+    # All normal text messages
+    # IMPORTANT: Only ONE text handler
     application.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
-            receive_check
+            handle_text
         )
     )
 
-    logger.info("Telegram bot started.")
+    print("Telegram bot is running...")
 
     application.run_polling(
         drop_pending_updates=True
