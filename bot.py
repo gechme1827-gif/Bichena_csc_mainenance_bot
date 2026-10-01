@@ -19,7 +19,7 @@ from telegram.ext import (
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# SAME TELEGRAM ACCOUNT = ADMIN + TECHNICIAN
+# SAME TELEGRAM ACCOUNT IS BOTH ADMIN AND TECHNICIAN
 ADMIN_ID = 405014345
 TECHNICIAN_IDS = [405014345]
 
@@ -45,8 +45,8 @@ def load_data():
         }
 
     try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        with open(DATA_FILE, "r", encoding="utf-8") as file:
+            return json.load(file)
     except Exception:
         return {
             "requests": [],
@@ -55,10 +55,10 @@ def load_data():
 
 
 def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
+    with open(DATA_FILE, "w", encoding="utf-8") as file:
         json.dump(
             data,
-            f,
+            file,
             indent=2,
             ensure_ascii=False
         )
@@ -77,7 +77,7 @@ def is_technician(user_id):
 
 
 # ============================================================
-# MENUS
+# USER MENU
 # ============================================================
 
 def user_menu():
@@ -113,6 +113,10 @@ def user_menu():
     return InlineKeyboardMarkup(keyboard)
 
 
+# ============================================================
+# ADMIN + TECHNICIAN MENU
+# ============================================================
+
 def admin_menu():
     keyboard = [
         [
@@ -129,9 +133,31 @@ def admin_menu():
         ],
         [
             InlineKeyboardButton(
-                "👨‍🔧 My Assigned Requests",
+                "📋 My Assigned Requests",
                 callback_data="tech_requests"
             )
+        ],
+        [
+            InlineKeyboardButton(
+                "📧 Generate Email",
+                callback_data="generate"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📋 My Emails",
+                callback_data="my_emails"
+            ),
+            InlineKeyboardButton(
+                "🔍 Check Email",
+                callback_data="check"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "👤 My Account",
+                callback_data="account"
+            ),
         ],
     ]
 
@@ -156,10 +182,7 @@ def get_request(request_id):
 # START
 # ============================================================
 
-async def start(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.effective_user
     user_id = user.id
@@ -174,10 +197,7 @@ async def start(
 
     save_data(data)
 
-    # ========================================================
     # ADMIN + TECHNICIAN
-    # ========================================================
-
     if is_admin(user_id) and is_technician(user_id):
 
         await update.message.reply_text(
@@ -190,10 +210,7 @@ async def start(
 
         return
 
-    # ========================================================
     # ADMIN ONLY
-    # ========================================================
-
     if is_admin(user_id):
 
         await update.message.reply_text(
@@ -204,23 +221,18 @@ async def start(
 
         return
 
-    # ========================================================
     # TECHNICIAN ONLY
-    # ========================================================
-
     if is_technician(user_id):
 
         await update.message.reply_text(
             f"👨‍🔧 Welcome Technician {user.first_name}!\n\n"
-            "You can view requests assigned to you."
+            "You can view requests assigned to you.",
+            reply_markup=admin_menu(),
         )
 
         return
 
-    # ========================================================
     # NORMAL USER
-    # ========================================================
-
     await update.message.reply_text(
         f"👋 Welcome {user.first_name}!\n\n"
         "Select an option:",
@@ -232,10 +244,7 @@ async def start(
 # GENERATE EMAIL / REQUEST
 # ============================================================
 
-async def generate_email(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def generate_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
     await query.answer()
@@ -257,24 +266,20 @@ async def generate_email(
 # RECEIVE NEW REQUEST
 # ============================================================
 
-async def receive_request(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def receive_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not context.user_data.get("creating_request"):
         return
 
     user = update.effective_user
-
     message_text = update.message.text
 
     data = load_data()
 
     if data["requests"]:
         next_id = max(
-            r["id"]
-            for r in data["requests"]
+            request["id"]
+            for request in data["requests"]
         ) + 1
     else:
         next_id = 1
@@ -294,7 +299,6 @@ async def receive_request(
     }
 
     data["requests"].append(request)
-
     save_data(data)
 
     context.user_data["creating_request"] = False
@@ -306,10 +310,7 @@ async def receive_request(
         "An administrator will review your request."
     )
 
-    # ========================================================
     # SEND REQUEST TO ADMIN
-    # ========================================================
-
     try:
 
         await context.bot.send_message(
@@ -333,10 +334,9 @@ async def receive_request(
             ),
         )
 
-    except Exception as e:
-
+    except Exception as error:
         logger.error(
-            f"Could not notify admin: {e}"
+            f"Could not notify admin: {error}"
         )
 
 
@@ -344,10 +344,7 @@ async def receive_request(
 # MY EMAILS
 # ============================================================
 
-async def my_emails(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def my_emails(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
     await query.answer()
@@ -357,8 +354,9 @@ async def my_emails(
     data = load_data()
 
     requests = [
-        r for r in data["requests"]
-        if r["user_id"] == user_id
+        request
+        for request in data["requests"]
+        if request["user_id"] == user_id
     ]
 
     if not requests:
@@ -371,18 +369,18 @@ async def my_emails(
 
     text = "📋 YOUR REQUESTS\n\n"
 
-    for r in requests:
+    for request in requests:
 
         technician = (
-            r["technician_name"]
+            request["technician_name"]
             or "Not assigned"
         )
 
         text += (
-            f"🆔 #{r['id']}\n"
-            f"📌 Status: {r['status']}\n"
+            f"🆔 #{request['id']}\n"
+            f"📌 Status: {request['status']}\n"
             f"👨‍🔧 Technician: {technician}\n"
-            f"📅 {r['created_at']}\n\n"
+            f"📅 {request['created_at']}\n\n"
         )
 
     await query.message.reply_text(text)
@@ -392,10 +390,7 @@ async def my_emails(
 # CHECK REQUEST
 # ============================================================
 
-async def check_email(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def check_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
     await query.answer()
@@ -413,18 +408,12 @@ async def check_email(
 # RECEIVE CHECK REQUEST ID
 # ============================================================
 
-async def receive_check(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def receive_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    if not context.user_data.get(
-        "checking_request"
-    ):
+    if not context.user_data.get("checking_request"):
         return
 
     try:
-
         request_id = int(
             update.message.text.strip()
         )
@@ -478,10 +467,7 @@ async def receive_check(
 # CREDITS
 # ============================================================
 
-async def credits(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def credits(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
     await query.answer()
@@ -497,10 +483,7 @@ async def credits(
 # ACCOUNT
 # ============================================================
 
-async def account(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def account(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
     await query.answer()
@@ -524,7 +507,7 @@ async def account(
         f"Username: "
         f"@{user.username if user.username else 'None'}\n"
         f"Telegram ID: {user.id}\n\n"
-        f"Roles:\n"
+        "Roles:\n"
         + "\n".join(roles)
     )
 
@@ -533,10 +516,7 @@ async def account(
 # ADMIN - ALL REQUESTS
 # ============================================================
 
-async def admin_requests(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def admin_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
     await query.answer()
@@ -554,33 +534,33 @@ async def admin_requests(
 
         return
 
-    for r in data["requests"]:
+    for request in data["requests"]:
 
         technician = (
-            r["technician_name"]
+            request["technician_name"]
             or "Not assigned"
         )
 
         keyboard = []
 
-        if not r["technician_id"]:
+        if not request["technician_id"]:
 
             keyboard.append(
                 [
                     InlineKeyboardButton(
                         "👨‍🔧 Assign Technician",
-                        callback_data=f"assign_{r['id']}"
+                        callback_data=f"assign_{request['id']}"
                     )
                 ]
             )
 
         await query.message.reply_text(
-            f"🆔 REQUEST #{r['id']}\n\n"
-            f"👤 Customer: {r['user_name']}\n"
-            f"📌 Status: {r['status']}\n"
+            f"🆔 REQUEST #{request['id']}\n\n"
+            f"👤 Customer: {request['user_name']}\n"
+            f"📌 Status: {request['status']}\n"
             f"👨‍🔧 Technician: {technician}\n"
-            f"📅 Created: {r['created_at']}\n\n"
-            f"📝 Details:\n{r['details']}",
+            f"📅 Created: {request['created_at']}\n\n"
+            f"📝 Details:\n{request['details']}",
             reply_markup=(
                 InlineKeyboardMarkup(keyboard)
                 if keyboard
@@ -593,10 +573,7 @@ async def admin_requests(
 # ASSIGN TECHNICIAN
 # ============================================================
 
-async def assign_request(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def assign_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
     await query.answer()
@@ -608,26 +585,18 @@ async def assign_request(
         query.data.split("_")[1]
     )
 
-    # Since the same account is the technician,
-    # show the technician directly.
-
     keyboard = [
         [
             InlineKeyboardButton(
-                "👨‍🔧 Assign to Me (405014345)",
-                callback_data=(
-                    f"tech_{request_id}_{ADMIN_ID}"
-                )
+                "👨‍🔧 Assign to Me",
+                callback_data=f"tech_{request_id}_{ADMIN_ID}"
             )
         ]
     ]
 
     await query.message.reply_text(
-        f"👨‍🔧 Select technician for "
-        f"Request #{request_id}:",
-        reply_markup=InlineKeyboardMarkup(
-            keyboard
-        )
+        f"👨‍🔧 Select technician for Request #{request_id}:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
@@ -635,10 +604,7 @@ async def assign_request(
 # TECHNICIANS
 # ============================================================
 
-async def technicians(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def technicians(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
     await query.answer()
@@ -658,10 +624,7 @@ async def technicians(
 # ASSIGN TECHNICIAN
 # ============================================================
 
-async def technician_selected(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def technician_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
     await query.answer()
@@ -678,10 +641,10 @@ async def technician_selected(
 
     request = None
 
-    for r in data["requests"]:
+    for item in data["requests"]:
 
-        if r["id"] == request_id:
-            request = r
+        if item["id"] == request_id:
+            request = item
             break
 
     if not request:
@@ -707,10 +670,7 @@ async def technician_selected(
         f"📌 Status: Assigned"
     )
 
-    # ========================================================
     # NOTIFY TECHNICIAN
-    # ========================================================
-
     try:
 
         await context.bot.send_message(
@@ -727,27 +687,23 @@ async def technician_selected(
                     [
                         InlineKeyboardButton(
                             "▶️ Start",
-                            callback_data=(
-                                f"startwork_{request_id}"
-                            )
+                            callback_data=f"startwork_{request_id}"
                         )
                     ],
                     [
                         InlineKeyboardButton(
                             "❌ Reject",
-                            callback_data=(
-                                f"reject_{request_id}"
-                            )
+                            callback_data=f"reject_{request_id}"
                         )
                     ],
                 ]
             )
         )
 
-    except Exception as e:
+    except Exception as error:
 
         logger.error(
-            f"Could not notify technician: {e}"
+            f"Could not notify technician: {error}"
         )
 
 
@@ -755,10 +711,7 @@ async def technician_selected(
 # TECHNICIAN REQUESTS
 # ============================================================
 
-async def tech_requests(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def tech_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
     await query.answer()
@@ -771,8 +724,9 @@ async def tech_requests(
     data = load_data()
 
     requests = [
-        r for r in data["requests"]
-        if r["technician_id"] == technician_id
+        request
+        for request in data["requests"]
+        if request["technician_id"] == technician_id
     ]
 
     if not requests:
@@ -783,41 +737,37 @@ async def tech_requests(
 
         return
 
-    for r in requests:
+    for request in requests:
 
         keyboard = []
 
-        if r["status"] == "Assigned":
+        if request["status"] == "Assigned":
 
             keyboard.append(
                 [
                     InlineKeyboardButton(
                         "▶️ Start",
-                        callback_data=(
-                            f"startwork_{r['id']}"
-                        )
+                        callback_data=f"startwork_{request['id']}"
                     )
                 ]
             )
 
-        elif r["status"] == "In Progress":
+        elif request["status"] == "In Progress":
 
             keyboard.append(
                 [
                     InlineKeyboardButton(
                         "✅ Complete",
-                        callback_data=(
-                            f"complete_{r['id']}"
-                        )
+                        callback_data=f"complete_{request['id']}"
                     )
                 ]
             )
 
         await query.message.reply_text(
-            f"🆔 REQUEST #{r['id']}\n\n"
-            f"👤 Customer: {r['user_name']}\n"
-            f"📌 Status: {r['status']}\n\n"
-            f"📝 Details:\n{r['details']}",
+            f"🆔 REQUEST #{request['id']}\n\n"
+            f"👤 Customer: {request['user_name']}\n"
+            f"📌 Status: {request['status']}\n\n"
+            f"📝 Details:\n{request['details']}",
             reply_markup=(
                 InlineKeyboardMarkup(keyboard)
                 if keyboard
@@ -830,10 +780,7 @@ async def tech_requests(
 # START WORK
 # ============================================================
 
-async def start_work(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def start_work(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
     await query.answer()
@@ -848,10 +795,10 @@ async def start_work(
 
     request = None
 
-    for r in data["requests"]:
+    for item in data["requests"]:
 
-        if r["id"] == request_id:
-            request = r
+        if item["id"] == request_id:
+            request = item
             break
 
     if not request:
@@ -871,11 +818,10 @@ async def start_work(
 
     await query.message.reply_text(
         f"▶️ Request #{request_id}\n\n"
-        "Status: IN PROGRESS"
+        "📌 Status: IN PROGRESS"
     )
 
-    # Notify customer
-
+    # NOTIFY CUSTOMER
     try:
 
         await context.bot.send_message(
@@ -887,10 +833,10 @@ async def start_work(
             )
         )
 
-    except Exception as e:
+    except Exception as error:
 
         logger.error(
-            f"Could not notify customer: {e}"
+            f"Could not notify customer: {error}"
         )
 
 
@@ -898,10 +844,7 @@ async def start_work(
 # COMPLETE REQUEST
 # ============================================================
 
-async def complete_request(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def complete_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
     await query.answer()
@@ -916,10 +859,10 @@ async def complete_request(
 
     request = None
 
-    for r in data["requests"]:
+    for item in data["requests"]:
 
-        if r["id"] == request_id:
-            request = r
+        if item["id"] == request_id:
+            request = item
             break
 
     if not request:
@@ -939,11 +882,10 @@ async def complete_request(
 
     await query.message.reply_text(
         f"✅ Request #{request_id}\n\n"
-        "Status: COMPLETED"
+        "📌 Status: COMPLETED"
     )
 
-    # Notify customer
-
+    # NOTIFY CUSTOMER
     try:
 
         await context.bot.send_message(
@@ -954,10 +896,10 @@ async def complete_request(
             )
         )
 
-    except Exception as e:
+    except Exception as error:
 
         logger.error(
-            f"Could not notify customer: {e}"
+            f"Could not notify customer: {error}"
         )
 
 
@@ -965,10 +907,7 @@ async def complete_request(
 # REJECT REQUEST
 # ============================================================
 
-async def reject_request(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def reject_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
     await query.answer()
@@ -983,10 +922,10 @@ async def reject_request(
 
     request = None
 
-    for r in data["requests"]:
+    for item in data["requests"]:
 
-        if r["id"] == request_id:
-            request = r
+        if item["id"] == request_id:
+            request = item
             break
 
     if not request:
@@ -1008,8 +947,7 @@ async def reject_request(
         f"❌ Request #{request_id} rejected."
     )
 
-    # Notify admin
-
+    # NOTIFY ADMIN
     try:
 
         await context.bot.send_message(
@@ -1022,10 +960,10 @@ async def reject_request(
             )
         )
 
-    except Exception as e:
+    except Exception as error:
 
         logger.error(
-            f"Could not notify admin: {e}"
+            f"Could not notify admin: {error}"
         )
 
 
@@ -1033,10 +971,7 @@ async def reject_request(
 # BUTTON ROUTER
 # ============================================================
 
-async def button_handler(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
 
@@ -1070,28 +1005,16 @@ async def button_handler(
         await assign_request(update, context)
 
     elif action.startswith("tech_"):
-        await technician_selected(
-            update,
-            context
-        )
+        await technician_selected(update, context)
 
     elif action.startswith("startwork_"):
-        await start_work(
-            update,
-            context
-        )
+        await start_work(update, context)
 
     elif action.startswith("complete_"):
-        await complete_request(
-            update,
-            context
-        )
+        await complete_request(update, context)
 
     elif action.startswith("reject_"):
-        await reject_request(
-            update,
-            context
-        )
+        await reject_request(update, context)
 
 
 # ============================================================
@@ -1132,9 +1055,14 @@ def main():
         )
     )
 
-    logger.info(
-        "Telegram bot started."
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            receive_check
+        )
     )
+
+    logger.info("Telegram bot started.")
 
     application.run_polling(
         drop_pending_updates=True
@@ -1143,56 +1071,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-"bot.yml"
-
-Because the IDs are now directly inside "bot.py", you only need "BOT_TOKEN" as a GitHub Secret.
-
-:::writing{variant="document" id="74106" title="bot.yml — GitHub Actions"}
-
-name: Telegram Bot
-
-on:
-  workflow_dispatch:
-
-jobs:
-  run-bot:
-    runs-on: ubuntu-latest
-
-    steps:
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install python-telegram-bot==21.10
-
-      - name: Run Telegram Bot
-        env:
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-        run: |
-          python bot.py
-
-Your setup now
-
-Your single Telegram account:
-
-ID: "405014345"
-
-has both:
-
-👑 ADMIN
-👨‍🔧 TECHNICIAN
-
-So the workflow is:
-
-User submits request → Admin sees request → Assign to Me → Technician receives it → Start → In Progress → Complete → Customer gets notification.
-
-You do not need "ADMIN_ID" or "TECHNICIAN_IDS" in GitHub Secrets anymore. Only "BOT_TOKEN" is required.
