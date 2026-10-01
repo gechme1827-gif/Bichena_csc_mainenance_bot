@@ -27,7 +27,7 @@ TOKEN = os.getenv("BOT_TOKEN")
 # Add Telegram numeric user IDs of your authorized administrators.
 # Example:
 # ADMIN_IDS = {123456789, 987654321}
-ADMIN_IDS = set()
+ADMIN_IDS = {405014345})
 
 DB_FILE = "maintenance_bot.db"
 
